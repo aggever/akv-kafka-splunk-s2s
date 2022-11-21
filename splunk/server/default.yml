@@ -1,0 +1,7 @@
+﻿splunk:
+  hec:
+    enable: True
+    ssl: false
+    port: 8088
+    # Auto-create a token named 'splunk_hec_token' with the specified value
+    token: 751ba372-ae65-4722-b2a8-058e149d19ac

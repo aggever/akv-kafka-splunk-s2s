@@ -1,0 +1,138 @@
+---
+version: '3'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  broker:
+    image: confluentinc/cp-kafka:7.3.0
+    hostname: broker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      # The following are for avoiding errors and warnings with the confluentinc/cp-server image
+      # ========================================================================================
+      # Set the Conflent license topic replication factor to 1, since we only have 1 broker
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      # Without this, brokers complain about insufficient broker count
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+
+  connect:
+    image: confluentinc/cp-kafka-connect:7.3.0
+    hostname: connect
+    container_name: connect
+    depends_on:
+      - broker
+    ports:
+      - "8083:8083" # For REST management
+      - "9997:9997" # For S2S Source Connector
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'broker:29092'
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_GROUP_ID: compose-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      # CONNECT_OFFSET_STORAGE_FILE_FILENAME: "/tmp/connect.offsets"
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components,/etc/kafka-connect/jars"
+      CONNECT_LOG4J_LOGGERS: org.apache.zookeeper=ERROR,org.I0Itec.zkclient=ERROR,org.reflections=ERROR
+    volumes:
+      - ./kafka-connect/conf:/etc/kafka-connect/conf
+      - ./kafka-connect/jars:/etc/kafka-connect/jars
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing Connectors"
+        /usr/bin/connect-standalone \
+          /etc/kafka-connect/conf/connect-standalone.properties \
+          /etc/kafka-connect/conf/splunk-s2s-source-connector.properties \
+          /etc/kafka-connect/conf/splunk-sink-connector.properties
+
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+
+        sleep infinity
+
+  splunk:
+    image: splunk/splunk:9.0.2
+    hostname: splunk
+    container_name: splunk
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    # Quick summary of Splunk ports:
+    #  - 8000 Splunk Web UI
+    #  - 8089 Splunk management & REST API
+    #  - 8080 Indexer Replication
+    #  - 8181 Search Replication
+    #  - 8191 Splunk Key Value Store
+    #  - 8065 Splunk App Server
+    #  - 8088 HTTP Event Collector (HEC)
+    #  - 9997 Indexer receiver (receive data from forwarders)
+    #  - 9997 SSL Indexer receiver (receive data from forwarders)
+    #  - 1433 DB Connector(to fetch data from databases to Splunk)
+    #  - 514  Legacy syslog input (TCP/UDP)
+    #
+    # Only port 8000 is exposed to docker host.
+    ports:
+      - "8000:8000"
+    environment:
+      SPLUNK_START_ARGS: "--accept-license"
+      SPLUNK_PASSWORD: "ch@ngeM3"
+      SPLUNK_DEFAULTS_URL: "/tmp/defaults/default.yml"
+      SPLUNK_ROLE: "splunk_standalone"
+      SPLUNK_DEBUG: "true"
+    volumes:
+      - ./splunk/server/default.yml:/tmp/defaults/default.yml
+
+  forwarder:
+    image: akv/uforwarder-s2s
+    # image: splunk/universalforwarder:8.1.12
+    hostname: forwarder
+    container_name: forwarder
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    environment:
+      SPLUNK_START_ARGS: "--accept-license"
+      SPLUNK_PASSWORD: "ch@ngeM3"
